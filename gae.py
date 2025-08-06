@@ -1,7 +1,9 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch_geometric
 from torch_geometric.nn import GINEConv, BatchNorm, Set2Set
+from typing import Tuple
 
 class GAE(nn.Module):
     """An auto-encoder to reconstruct `ase.Atoms`"""
@@ -44,15 +46,15 @@ class GAE(nn.Module):
         self.act_ae = acts[activation_ae]
 
         # node & global embeddings unchanged
+        # (119+11=130, 64)
         self.node_emb = nn.Linear(in_channels + chem_dim, hidden_dim)
-
-        self.global_cond_proj = nn.Linear(hidden_dim, hidden_dim)
 
         # edge embedding & convs unchanged
         self.edge_embedding = nn.Sequential(
             nn.Linear(edge_dim, hidden_dim), self.act_ae,
             nn.Linear(hidden_dim, hidden_dim)
         )
+
         self.convs = nn.ModuleList([
             GINEConv(
                 nn.Sequential(
@@ -61,6 +63,7 @@ class GAE(nn.Module):
                 ), edge_dim=hidden_dim
             ) for _ in range(num_conv_layers)
         ])
+
         self.bns = nn.ModuleList([BatchNorm(hidden_dim) for _ in range(num_conv_layers)])
         self.dropout = nn.Dropout(dropout_rate)
         self.pool    = Set2Set(hidden_dim, processing_steps=3)
@@ -76,15 +79,28 @@ class GAE(nn.Module):
         )
         self.edge_decoder = nn.Sequential(
             nn.Linear(2*latent_dim, hidden_dim), self.act_ae,
-            nn.Linear(hidden_dim, hidden_dim//2), self.act_ae,
-            nn.Linear(hidden_dim//2, 1)
+            nn.Linear(hidden_dim, hidden_dim), self.act_ae,  # Increased capacity
+            nn.Linear(hidden_dim, edge_dim)  # Output full edge_dim features
         )
         self.edge_pred  = nn.Sequential(
             nn.Linear(2*latent_dim, hidden_dim), self.act_ae,
             nn.Linear(hidden_dim, 1)
         )
 
-    def forward(self, data):
+    def forward(self, data: torch_geometric.data.Data) -> Tuple[torch.Tensor]:
+        """Decompose a `torch_geometric.data.Data` into features.
+        
+        Parameters
+        ----------
+        data: a `torch_geometric.data.Data` from an `ase.Atoms`
+        
+        Returns
+        -------
+        latent_ae: latent space representation of `data`
+        node_recon: reconstructed node features of `data`
+        edge_logits: binary classification of edge existence in `data`
+        edge_recon: reconstructed edge features of `data`
+        """
         # embed nodes
         raw = torch.cat([data.x.float(), data.x_node_feats], dim=1)
         x = self.act_ae(self.node_emb(raw))
@@ -101,16 +117,23 @@ class GAE(nn.Module):
             x = self.dropout(x)
 
         # pooling & latent
-        pooled   = self.pool(x, batch)
+        pooled = self.pool(x, batch)
         latent_ae = self.global_enc_ae(pooled)
 
         # decoders
         global_node = latent_ae[batch]
-        node_recon  = self.node_decoder(global_node)
+        node_recon = self.node_decoder(global_node)
 
         row, col = data.edge_index
-        edge_in   = torch.cat([global_node[row], global_node[col]], dim=1)
-        edge_recon  = self.edge_decoder(edge_in)
+        edge_in = torch.cat([global_node[row], global_node[col]], dim=1)
+
+        edge_recon = self.edge_decoder(edge_in)
+
+        # Ensure distance component stays positive
+        edge_recon_dist = edge_recon[:, 0].unsqueeze(1) # (1, 4)
+        edge_recon_dist = F.softplus(edge_recon_dist)  # Enforce positive distance
+        edge_recon = torch.cat([edge_recon_dist, edge_recon[:, 1:]], dim=1)
+
         edge_logits = self.edge_pred(edge_in)
 
         # return everything except property_pred
@@ -137,14 +160,18 @@ def train_epoch(model, loader, optimizer):
         # node_acc  = compute_node_accuracy(data, node_recon)
 
         # 2) Edge AE: distance + existence
-        true_dist      = data.edge_attr[:,0].unsqueeze(1)
-        edge_feat_loss = F.mse_loss(edge_recon, true_dist)
+        edge_feat_loss = F.mse_loss(edge_recon, data.edge_attr.float())
+
         edge_bce_loss  = F.binary_cross_entropy_with_logits(edge_logits, torch.ones_like(edge_logits))
 
         # combine
         loss = node_loss + edge_feat_loss + edge_bce_loss
 
         loss.backward()
+
+        # gradient clipping
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+
         optimizer.step()
         # scheduler.step()
 
@@ -164,20 +191,16 @@ def validate_epoch(model, loader):
     stats = {
         'total'     : 0.0,
         'node_loss' : 0.0,
-        # 'node_acc'  : 0.0,
         'edge_feat' : 0.0,
         'edge_bce'  : 0.0,
     }
 
     for data in loader:
-        # data = data.to(device)
         latent_ae, node_recon, edge_logits, edge_recon, = model(data)
 
         node_loss = F.cross_entropy(node_recon, data.x.argmax(dim=1))
-        # node_acc  = compute_node_accuracy(data, node_recon)
 
-        true_dist      = data.edge_attr[:,0].unsqueeze(1)
-        edge_feat_loss = F.mse_loss(edge_recon, true_dist)
+        edge_feat_loss = F.mse_loss(edge_recon, data.edge_attr.float())
         edge_bce_loss  = F.binary_cross_entropy_with_logits(edge_logits, torch.ones_like(edge_logits))
 
         ae_loss = node_loss + edge_feat_loss + edge_bce_loss
@@ -185,7 +208,6 @@ def validate_epoch(model, loader):
 
         stats['total']     += loss.item()
         stats['node_loss'] += node_loss.item()
-        # stats['node_acc']  += node_acc
         stats['edge_feat'] += edge_feat_loss.item()
         stats['edge_bce']  += edge_bce_loss.item()
 
