@@ -35,4 +35,4 @@ A foundational model to form compact representation of crystals.
 `conda create -f environment.yml`
 
 ## Run the auto-encoder
-Go to `main.ipynb`. The paper is at https://www.overleaf.com/read/ygcvtsfwtqbs#91eb2c. This project is still under development.
+Run [`main.ipynb`](./main.ipynb). A trained auto-encoder is at [`gae.pt`](./gae.pt). The latent space representation of the atoms under [`cif-files/`](./cif-files/) are at [`compressed_test.pt`](./compressed_test.pt) and [`compressed_train.pt`](./compressed_train.pt). The paper is at https://www.overleaf.com/read/ygcvtsfwtqbs#91eb2c. 

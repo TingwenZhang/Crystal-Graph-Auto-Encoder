@@ -138,6 +138,23 @@ class GAE(nn.Module):
 
         # return everything except property_pred
         return latent_ae, node_recon, edge_logits, edge_recon
+    
+    @torch.no_grad()
+    def compress(self, loader: torch_geometric.data.DataLoader, filename: str) -> None:
+        f"""Produce the latent space representation of all data. Save the result to `{filename}.pt`.
+
+        Parameters
+        ----------
+        loader: load `torch_geometric.data.Data`
+        filename: save the latent space representation
+
+        Returns
+        -------
+        None
+        """
+        latents = torch.cat([self.forward(data)[0].cpu() for data in loader])
+        torch.save(latents, f"{filename}.pt")
+
 
 def train_epoch(model, loader, optimizer):
     model.train()
@@ -170,7 +187,7 @@ def train_epoch(model, loader, optimizer):
         loss.backward()
 
         # gradient clipping
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 
         optimizer.step()
         # scheduler.step()
@@ -201,10 +218,10 @@ def validate_epoch(model, loader):
         node_loss = F.cross_entropy(node_recon, data.x.argmax(dim=1))
 
         edge_feat_loss = F.mse_loss(edge_recon, data.edge_attr.float())
-        edge_bce_loss  = F.binary_cross_entropy_with_logits(edge_logits, torch.ones_like(edge_logits))
+        edge_bce_loss = F.binary_cross_entropy_with_logits(edge_logits, torch.ones_like(edge_logits))
 
         ae_loss = node_loss + edge_feat_loss + edge_bce_loss
-        loss    = ae_loss
+        loss = ae_loss
 
         stats['total']     += loss.item()
         stats['node_loss'] += node_loss.item()
