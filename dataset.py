@@ -96,6 +96,63 @@ class AtomsDataset(Dataset):
         
         self.tensors = [self._convert(atoms) for atoms in self.dataset]
     
+    def _convert(self, atoms: Atoms, cutoff: float = 8.0) -> torch_geometric.data.Data:
+        """Convert an `ase.Atoms` into a `torch_geometric.data.Data`.
+        
+        Parameters
+        ----------
+        atoms: an `ase.Atoms`
+        cutoff: cutoff radius
+
+        Returns
+        -------
+        tensor representation of `atoms`
+        """
+        # atom in `atoms`
+        atomic_numbers = atoms.get_atomic_numbers()
+        n_atoms = len(atomic_numbers)
+
+        # one-hot encoding
+        z_encodings = torch.zeros(n_atoms, MAX_Z+1, dtype=torch.long)
+        for i in range(n_atoms):
+            z = atomic_numbers[i]
+            z_encodings[i][z] = 1
+        
+        # chemical features per node
+        x_node_feats = M_FEATURE_TABLE[atomic_numbers]
+
+        # position of every atom
+        positions = torch.FloatTensor(atoms.get_positions())
+
+        # 3 unit cell vectors
+        cell = torch.FloatTensor(np.array(atoms.get_cell()))
+
+        # tags
+        tags = torch.LongTensor(atoms.get_tags())
+        
+        # edges via radius_graph
+        edge_index = radius_graph(positions, r=cutoff, loop=False)
+
+        # bulk edge-attr calculations
+        row, col = edge_index
+        vecs = positions[col] - positions[row] # [E,3]
+        edge_len = vecs.norm(dim=1, keepdim=True) # [E,1]
+        edge_dirs = vecs / (edge_len + 1e-9) # [E,3]
+
+        # final edge_attr (4 dimensions: length + direction)
+        edge_attr = torch.cat([edge_len, edge_dirs], dim=1)  # [E, 4]
+        
+        data = torch_geometric.data.Data(x=z_encodings,
+                                         x_node_feats=x_node_feats,
+                                         edge_attr=edge_attr,
+                                         edge_index=edge_index,
+                                         cell=cell,
+                                         pos=positions,
+                                         n_atoms=n_atoms,
+                                         tags=tags)
+
+        return data
+    
     def __getitem__(self, index: int) -> torch_geometric.data.Data:
         """Get the `Data` at `index`.
 
@@ -147,62 +204,3 @@ class AtomsDataset(Dataset):
         None
         """
         plot_atoms(self.dataset[index])
-
-    def _convert(self, atoms: Atoms, cutoff: float = 8.0) -> torch_geometric.data.Data:
-        """Convert an `ase.Atoms` into a `torch_geometric.data.Data`.
-        
-        Parameters
-        ----------
-        atoms: an `ase.Atoms`
-        cutoff: cutoff radius
-
-        Returns
-        -------
-        tensor representation of `atoms`
-        """
-        # atom in `atoms`
-        atomic_numbers = atoms.get_atomic_numbers()
-        n_atoms = len(atomic_numbers)
-
-        # one-hot encoding
-        z_encodings = torch.zeros(n_atoms, MAX_Z+1, dtype=torch.long)
-        for i in range(n_atoms):
-            z = atomic_numbers[i]
-            z_encodings[i][z] = 1
-        
-        # chemical features per node
-        x_node_feats = M_FEATURE_TABLE[atomic_numbers]
-
-        # position of every atom
-        positions = torch.FloatTensor(atoms.get_positions())
-
-        # 3 unit cell vectors
-        cell = torch.FloatTensor(np.array(atoms.get_cell()))
-
-        # tags
-        tags = torch.LongTensor(atoms.get_tags())
-        
-        # edges via radius_graph
-        edge_index = radius_graph(positions, r=cutoff, loop=False)
-
-        # bulk edge-attr calculations
-        row, col = edge_index
-        vecs = positions[col] - positions[row] # [E,3]
-        edge_len = vecs.norm(dim=1, keepdim=True) # [E,1]
-        edge_dirs = vecs / (edge_len + 1e-9) # [E,3]
-
-        # final edge_attr
-        edge_attr = torch.cat([edge_len, edge_dirs], dim=1) # [E,1+1+3=5] 
-
-        edge_index, edge_attr = remove_self_loops(edge_index, edge_attr)
-        
-        data = torch_geometric.data.Data(x=z_encodings,
-                                         x_node_feats=x_node_feats,
-                                         edge_attr=edge_attr,
-                                         edge_index=edge_index,
-                                         cell=cell,
-                                         pos=positions,
-                                         n_atoms=n_atoms,
-                                         tags=tags)
-
-        return data
