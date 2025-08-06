@@ -3,11 +3,14 @@ A foundational model to form compact representation of crystals.
 
 ## File Structure
 ```
+.
 ├── M_FEATURE_TABLE.pt
 ├── README.md
 ├── cif-files
 │   ├── test
 │   └── train
+├── compressed_test.pt
+├── compressed_train.pt
 ├── dataset.py
 ├── edge_bce.png
 ├── edge_feat.png
