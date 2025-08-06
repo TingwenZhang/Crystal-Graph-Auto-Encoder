@@ -66,7 +66,7 @@ class GAE(nn.Module):
 
         self.bns = nn.ModuleList([BatchNorm(hidden_dim) for _ in range(num_conv_layers)])
         self.dropout = nn.Dropout(dropout_rate)
-        self.pool    = Set2Set(hidden_dim, processing_steps=3)
+        self.pool = Set2Set(hidden_dim, processing_steps=3)
 
         # autoencoder heads
         self.global_enc_ae = nn.Sequential(
@@ -82,7 +82,7 @@ class GAE(nn.Module):
             nn.Linear(hidden_dim, hidden_dim), self.act_ae,  # Increased capacity
             nn.Linear(hidden_dim, edge_dim)  # Output full edge_dim features
         )
-        self.edge_pred  = nn.Sequential(
+        self.edge_pred = nn.Sequential(
             nn.Linear(2*latent_dim, hidden_dim), self.act_ae,
             nn.Linear(hidden_dim, 1)
         )
@@ -161,7 +161,6 @@ def train_epoch(model, loader, optimizer):
     stats = {
         'total'     : 0.0,
         'node_loss' : 0.0,
-        # 'node_acc'  : 0.0,
         'edge_feat' : 0.0,
         'edge_bce'  : 0.0,
     }
@@ -179,7 +178,7 @@ def train_epoch(model, loader, optimizer):
         # 2) Edge AE: distance + existence
         edge_feat_loss = F.mse_loss(edge_recon, data.edge_attr.float())
 
-        edge_bce_loss  = F.binary_cross_entropy_with_logits(edge_logits, torch.ones_like(edge_logits))
+        edge_bce_loss = F.binary_cross_entropy_with_logits(edge_logits, torch.ones_like(edge_logits))
 
         # combine
         loss = node_loss + edge_feat_loss + edge_bce_loss
@@ -190,14 +189,12 @@ def train_epoch(model, loader, optimizer):
         nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 
         optimizer.step()
-        # scheduler.step()
 
         # accumulate
-        stats['total']     += loss.item()
+        stats['total'] += loss.item()
         stats['node_loss'] += node_loss.item()
-        # stats['node_acc']  += node_acc
         stats['edge_feat'] += edge_feat_loss.item()
-        stats['edge_bce']  += edge_bce_loss.item()
+        stats['edge_bce'] += edge_bce_loss.item()
 
     n = len(loader)
     return {k: stats[k] / n for k in stats}
@@ -223,10 +220,10 @@ def validate_epoch(model, loader):
         ae_loss = node_loss + edge_feat_loss + edge_bce_loss
         loss = ae_loss
 
-        stats['total']     += loss.item()
+        stats['total'] += loss.item()
         stats['node_loss'] += node_loss.item()
         stats['edge_feat'] += edge_feat_loss.item()
-        stats['edge_bce']  += edge_bce_loss.item()
+        stats['edge_bce'] += edge_bce_loss.item()
 
     n = len(loader)
     return {k: stats[k] / n for k in stats}
